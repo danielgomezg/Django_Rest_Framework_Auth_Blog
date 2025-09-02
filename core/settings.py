@@ -25,10 +25,10 @@ ALLOWED_HOSTS = env.list("ALLOWED_HOSTS")
 
 #Django valida el origen de las peticiones POST (como el login del admin) para evitar ataques tipo CSRF.
 CSRF_TRUSTED_ORIGINS = [
-    "https://crispy-spoon-xvq7w59wq66fpr47-8002.app.github.dev",
-    "http://localhost:8002",
-    "https://localhost:8002",
-    "http://127.0.0.1:8002",   
+    "https://effective-space-spoon-g7wjq45qpq9f94rx-8003.app.github.dev"
+    "http://localhost:8003",
+    "https://localhost:8003",
+    "http://127.0.0.1:8003",   
 ]
 
 DJANGO_APPS = [
@@ -44,7 +44,7 @@ PROJECT_APPS = [
     'apps.authentication',
     'apps.user_profile',
     'apps.media',
-    'apps.blog'
+    'apps.blog',
 ]
 
 THIRD_PARTY_APPS = [

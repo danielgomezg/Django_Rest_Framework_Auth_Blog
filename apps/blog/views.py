@@ -1,6 +1,6 @@
 from rest_framework.generics import ListAPIView, RetrieveAPIView
 from .serializers import PostListSerializer, PostSerializer, HeadingSerializer, CategoryListSerializer
-from .models import Post, Heading, PostAnalytics, Category
+from .models import Post, Heading, PostAnalytics, Category, PostView,  PostInteraction, Comment, PostLike, PostShare
 from rest_framework.views import APIView
 from rest_framework_api.views import StandardAPIView
 from rest_framework.response import Response
@@ -8,6 +8,7 @@ from .utils import get_client_ip
 from rest_framework.exceptions import NotFound, APIException 
 from rest_framework import permissions
 from .tasks import increment_post_impressions, increment_post_views_task
+from apps.authentication.models import UserAccount
 import redis
 from django.conf import settings
 from core.permissions import HasValidAPIKey
@@ -150,25 +151,35 @@ class PostDetailView(StandardAPIView):
 
     def get(self, request, slug):
         ip_address = get_client_ip(request)
+        #slug = request.query_params.get("slug")
+        
+        user = request.user if request.user.is_authenticated else None
+
+        if not slug:
+            raise NotFound(detail="A valid slug must be provided")
 
         try:
-            #Antes de llamar a la bd se verifica si hay un cahce guardado con la llave post_list (el cache se guarda con llave valor)
-            cached_post = cache.get(f"post_detail:{slug}") 
-            #si existe responde el cache si no se jecuta toda la operacion get 
+            # Verificar si los datos están en caché
+            cache_key = f"post_detail:{slug}"
+            cached_post = cache.get(cache_key)
             if cached_post:
-               #incremento las vistas del posts
-               increment_post_views_task.delay(cached_post['slug'], ip_address)
-               return self.response(cached_post) #Response(cached_post)
+                serialized_post = PostSerializer(cached_post, context={'request': request}).data
+                self._register_view_interaction(cached_post, ip_address, user)
+                return self.response(serialized_post)
 
-            post = Post.postObjects.get(slug=slug)
+            # Si no está en caché, obtener el post de la base de datos
+            try:
+                post = Post.postObjects.get(slug=slug)
+            except Post.DoesNotExist:
+                raise NotFound(f"Post {slug} does not exist.")
 
-            serialized_post = PostSerializer(post).data
+            serialized_post = PostSerializer(post, context={'request': request}).data
 
-            #se guarda el serialized_post en cache por 5 min
-            cache.set(f"post_detail:{slug}", serialized_post, timeout=60*5)
+            # Guardar en el caché
+            cache.set(cache_key, post, timeout=60 * 5)
 
-            #incremento las vistas del posts
-            increment_post_views_task.delay(post.slug, ip_address)
+            # Registrar interaccion
+            self._register_view_interaction(post, ip_address, user)
 
         except Post.DoesNotExist:
             raise NotFound(detail="The requested post does not exist")
@@ -182,6 +193,29 @@ class PostDetailView(StandardAPIView):
         #    return Response(serialized_post)
        # PostView.objects.create(post=post, ip_address=client_ip)
         return self.response(serialized_post) #Response(serialized_post)
+    
+    def _register_view_interaction(self, post, ip_address, user):
+        """
+        Registra la interacción de tipo 'view', maneja incrementos de vistas únicas 
+        y totales, y actualiza PostAnalytics.
+        """
+        # Verifica si esta IP y usuario ya registraron una vista única
+        if not PostView.objects.filter(post=post, ip_address=ip_address, user=user).exists():
+            # Crea un registro de vista unica
+            PostView.objects.create(post=post, ip_address=ip_address, user=user)
+
+            try:
+                PostInteraction.objects.create(
+                    user=user,
+                    post=post,
+                    interaction_type="view",
+                    ip_address=ip_address,
+                )
+            except Exception as e:
+                raise ValueError(f"Error creeating PostInteraction: {e}")
+
+            analytics, _ = PostAnalytics.objects.get_or_create(post=post)
+            analytics.increment_metric('views')
 
 #class PostDetailView(RetrieveAPIView):
  #   def get(self, request, slug):
@@ -375,6 +409,292 @@ class IncrementCategoryClickView(StandardAPIView):
             "clicks": category_analytics.clicks
         })
 
+class ListPostCommentsView(StandardAPIView):
+    permission_classes = [HasValidAPIKey]
+
+    def get(self, request):
+
+        post_slug = request.query_params.get("slug", None)
+        page = request.query_params.get("p", "1")
+
+        if not post_slug:
+            raise NotFound(detail="A valid post slug must be provided")
+        
+        # Definir clave cache
+        cache_key = f"post_comments:{post_slug}:{page}"
+        cached_comments = cache.get(cache_key)
+        if cached_comments:
+            return self.paginate(request, cached_comments)
+        
+        try:
+            post = Post.objects.get(slug=post_slug)
+        except Post.DoesNotExist:
+            raise ValueError(f"Post: {post_slug} does not exist")
+        
+        # Obtener solo los comentarios principales
+        comments = Comment.objects.filter(post=post, parent=None)
+
+        serialized_comments = CommentSerializer(comments, many=True).data
+
+        # Guardar clave en el índice
+        cache_index_key = f"post_comments_cache_keys:{post_slug}"
+        cache_keys = cache.get(cache_index_key, [])
+        cache_keys.append(cache_key)
+        cache.set(cache_index_key, cache_keys, timeout=60 * 5)
+
+        # Almacenar los datos en caché
+        cache.set(cache_key, serialized_comments, timeout=60 * 5)
+
+        return self.paginate(request, serialized_comments)
+
+
+class PostCommentViews(StandardAPIView):
+    permission_classes = [HasValidAPIKey, permissions.IsAuthenticated]
+    
+    def post(self, request):
+        """
+        Crear un comentario para un post
+        """
+        # Obtener parametros
+        post_slug = request.data.get("slug", None)
+        user = request.user
+        ip_address = get_client_ip(request)
+        #primero se sanitiza el contenido, para que no haya por ejemplo codigo html que puede perjudicar; la fucnion esta en utils -> string_utils.py
+        content = sanitize_html(request.data.get("content", None))
+
+        if not post_slug:
+            raise NotFound(detail="A valid post slug must be provided")
+        
+        try:
+            post = Post.objects.get(slug=post_slug)
+        except Post.DoesNotExist:
+            raise NotFound(detail=f"Post: {post_slug} does not exist")
+        
+        # Crear comentario
+        comment = Comment.objects.create(
+            user=user,
+            post=post,
+            content=content,
+        )
+
+        # Invalidar el cache de comentarios para el post
+        self._invalidate_post_comments_cache(post_slug)
+
+        # Actualizar interaccion de post
+        self._register_comment_interaction(comment, post, ip_address, user)
+
+        return self.response(f"Comment created for post {post.title}")
+    
+    def put(self, request):
+        """
+        Modificar un comentario
+        """
+        # Obtener parametros
+        comment_id = request.data.get("comment_id", None)
+        content = sanitize_html(request.data.get("content", None))
+
+        if not comment_id:
+            raise NotFound(detail="A valid comment id must be provided")
+        
+        try:
+            comment = Comment.objects.get(id=comment_id, user=request.user)
+        except Comment.DoesNotExist:
+            raise NotFound(detail=f"Comment with id: {comment_id} does not exist")
+        
+        comment.content = content
+        comment.save()
+
+        # Invalidar el cache de comentarios para el post
+        self._invalidate_post_comments_cache(comment.post.slug)
+
+        if comment.parent and comment.parent.replies.exists():
+            self._invalidate_comment_replies_cache(comment.parent.id)
+
+        return self.response("Comment content updated successfully")
+    
+    def delete(self, request):
+        """
+        Borrar un comentario
+        """
+        comment_id = request.query_params.get("comment_id", None)
+
+        if not comment_id:
+            raise NotFound(detail="A valid comment id must be provided")
+        
+        try:
+            comment = Comment.objects.get(id=comment_id, user=request.user)
+        except Comment.DoesNotExist:
+            raise NotFound(detail=f"Comment with id: {comment_id} does not exist")
+        
+        post = comment.post
+        post_analytics, _ = PostAnalytics.objects.get_or_create(post=post)
+
+        if comment.parent and comment.parent.replies.exists():
+            self._invalidate_comment_replies_cache(comment.parent.id)
+
+        comment.delete()
+
+        # Actualizar metricas
+        comments_count = Comment.objects.filter(post=post, is_active=True).count()
+
+        post_analytics.comments = comments_count
+        post_analytics.save()
+
+        # Invalidar el cache de comentarios para el post
+        self._invalidate_post_comments_cache(post.slug)
+
+        return self.response("Comment deleted successfully")
+    
+    def _register_comment_interaction(self, comment, post, ip_address, user):
+
+        PostInteraction.objects.create(
+            user=user,
+            post=post,
+            interaction_type="comment",
+            comment=comment,
+            ip_address=ip_address
+        )
+
+        analytics, _ = PostAnalytics.objects.get_or_create(post=post)
+        analytics.increment_metric("comments")
+
+    def _invalidate_post_comments_cache(self, post_slug):
+        """
+        Invalida todas las claves de caché relacionadas con los comentarios de un post.
+        """
+        # definir clave cache
+        cache_index_key = f"post_comments_cache_keys:{post_slug}"
+        cache_keys = cache.get(cache_index_key, [])
+
+        # Eliminar cada clave almacenada en el indice
+        for key in cache_keys:
+            cache.delete(key)
+
+        # Limpiar el indice de claves
+        cache.delete(cache_index_key)
+
+    def _invalidate_comment_replies_cache(self, comment_id):
+        """
+        Invalida todas las claves de caché relacionadas con las respuestas de un comentario.
+        """
+        cache_index_key = f"comment_replies_cache_keys:{comment_id}"
+        cache_keys = cache.get(cache_index_key, [])
+
+        for key in cache_keys:
+            cache.delete(key)
+
+        cache.delete(cache_index_key)
+
+
+class ListCommentRepliesView(StandardAPIView):
+    permission_classes = [HasValidAPIKey]
+
+    def get(self, request):
+
+        comment_id = request.query_params.get("comment_id")
+        page = request.query_params.get("p", "1")
+
+        if not comment_id:
+            raise NotFound(detail="A valid comment_id must be provided")
+        
+        # Definir la clave cache
+        cache_key = f"comment_replies:{comment_id}:{page}"
+        cached_replies = cache.get(cache_key)
+        if cached_replies:
+            return self.paginate(request, cached_replies)
+        
+        # Obtener el comentario padre
+        try:
+            parent_comment = Comment.objects.get(id=comment_id)
+        except Comment.DoesNotExist:
+            raise NotFound(detail=f"Comment with id: {comment_id} does not exist")
+        
+        # Filtrar las respuestas activas del comentario padre
+        replies = parent_comment.replies.filter(is_active=True).order_by("-created_at")
+
+        # Serializar respuesta
+        serialized_replies = CommentSerializer(replies, many=True).data
+
+        # Registrar la clave en el índice de caché
+        self._register_comment_reply_cache_key(comment_id, cache_key)
+
+        # Guardar las respuestas en el caché
+        cache.set(cache_key, serialized_replies, timeout=60 * 5)
+
+        return self.paginate(request, serialized_replies)
+    
+    def _register_comment_reply_cache_key(self, comment_id, cache_key):
+        """
+        Registrar claves de caché relacionadas con las respuestas de un comentario.
+        """
+        cache_index_key = f"comment_replies_cache_keys:{comment_id}"
+        cache_keys = cache.get(cache_index_key, [])
+        if cache_key not in cache_keys:
+            cache_keys.append(cache_key)
+        cache.set(cache_index_key, cache_keys, timeout=60 * 5)
+
+    
+class CommentReplyViews(StandardAPIView):
+    permission_classes = [HasValidAPIKey, permissions.IsAuthenticated]
+
+    def post(self, request):
+
+        # Obtener parametros
+        comment_id = request.data.get("comment_id")
+        user = request.user
+        ip_address = get_client_ip(request)
+        content = sanitize_html(request.data.get("content", None))
+
+        if not comment_id:
+            raise NotFound(detail="A valid comment_id must be provided")
+
+        # Obtener el comentario padre
+        try:
+            parent_comment = Comment.objects.get(id=comment_id)
+        except Comment.DoesNotExist:
+            raise NotFound(detail=f"Comment with id: {comment_id} does not exist")
+        
+        # Crear el reply
+        comment = Comment.objects.create(
+            user=user,
+            post=parent_comment.post,
+            parent=parent_comment,
+            content=content,
+        )
+
+        # Invalidar caché de respuestas
+        self._invalidate_comment_replies_cache(comment_id)
+
+        # Actualiizar metricas
+        self._register_comment_interaction(comment, comment.post, ip_address, user)
+
+        return self.response("Comment reply created successfully")
+
+    def _register_comment_interaction(self, comment, post, ip_address, user):
+
+        PostInteraction.objects.create(
+            user=user,
+            post=post,
+            interaction_type="comment",
+            comment=comment,
+            ip_address=ip_address
+        )
+
+        analytics, _ = PostAnalytics.objects.get_or_create(post=post)
+        analytics.increment_metric("comments")
+
+    def _invalidate_comment_replies_cache(self, comment_id):
+        """
+        Invalida todas las claves de caché relacionadas con las respuestas de un comentario.
+        """
+        cache_index_key = f"comment_replies_cache_keys:{comment_id}"
+        cache_keys = cache.get(cache_index_key, [])
+
+        for key in cache_keys:
+            cache.delete(key)
+
+        cache.delete(cache_index_key)
+
 class GenerateFakePostsView(StandardAPIView):
 
     def get(self,request):
@@ -392,9 +712,11 @@ class GenerateFakePostsView(StandardAPIView):
 
         for _ in range(posts_to_generate):
             title = fake.sentence(nb_words=6)  # Generar título aleatorio
+            user = UserAccount.objects.get(username="test_editor")
             post = Post(
                 id=uuid.uuid4(),
                 title=title,
+                user=user,
                 description=fake.sentence(nb_words=12),
                 content=fake.paragraph(nb_sentences=5),
                 keywords=", ".join(fake.words(nb=5)),
