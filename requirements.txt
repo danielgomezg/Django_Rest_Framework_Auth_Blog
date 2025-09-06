@@ -4,6 +4,7 @@ djangorestframework-api-response==0.1.0
 django-redis==5.4.0
 django-environ==0.9.0
 django-ckeditor==6.3.2
+django-cors-headers==4.6.0
 
 pyotp==2.9.0
 qrcode==8.0
@@ -44,3 +45,6 @@ django-axes==7.0.0
 
 #Generar datos para prueba
 Faker==33.0.0 
+
+#sanitiza html
+bleach==6.2.0

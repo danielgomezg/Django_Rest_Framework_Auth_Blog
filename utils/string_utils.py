@@ -17,6 +17,7 @@ def sanitize_string(string):
         return ""
     
     # Sanitizar usando bleach para remover cualquier tag que no deseamos
+    #tags=[] quita todas las etiquetas HTML; tags=['b'] quita todas menos la etiqueta <b>
     cleaned_string = bleach.clean(string, tags=[], strip=True)
 
     # Permittir solamente letras, numeros, espacios, apostrofes, comillas, comas y puntos

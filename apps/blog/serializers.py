@@ -53,6 +53,8 @@ class PostSerializer(serializers.ModelSerializer):
     category = CategorySerializer()
     headings = HeadingSerializer(many=True)
     view_count = serializers.SerializerMethodField() #el nombre de esta variable debe ser igual a la funcion sin e get_ y se agrega view_count a all (en este caso por que es all se agrega automanticamente)
+    comments_count = serializers.SerializerMethodField()
+    likes_count = serializers.SerializerMethodField()
     thumbnail = MediaSerializer()
     user = serializers.StringRelatedField()
     class Meta:
@@ -61,6 +63,21 @@ class PostSerializer(serializers.ModelSerializer):
 
     def get_view_count(self, obj):
         return obj.post_analytics.views if obj.post_analytics else 0
+
+    def get_comments_count(self, obj):
+        return obj.post_comments.filter(parent=None, is_active=True).count()
+
+    def get_lkikes_count(self, obj):
+        return obj.likes.filter().count()
+
+    def get_has_liked(self, obj):
+        """
+        Verifica si el usuario autenticado ha dado 'like' al post.
+        """
+        user = self.context.get('request').user
+        if user and user.is_authenticated:
+            return PostLike.objects.filter(post=obj, user=user).exists()
+        return False
 
 class PostListSerializer(serializers.ModelSerializer):
     category = CategoryListSerializer()

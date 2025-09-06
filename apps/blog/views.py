@@ -5,11 +5,12 @@ from rest_framework.views import APIView
 from rest_framework_api.views import StandardAPIView
 from rest_framework.response import Response
 from .utils import get_client_ip
-from rest_framework.exceptions import NotFound, APIException 
+from rest_framework.exceptions import NotFound, APIException, ValidationError
 from rest_framework import permissions
 from .tasks import increment_post_impressions, increment_post_views_task
 from apps.authentication.models import UserAccount
 import redis
+#from bs4 import BeautifulSoup
 from django.conf import settings
 from core.permissions import HasValidAPIKey
 #metodo de cache mas rapido
@@ -26,8 +27,277 @@ from django.utils.text import slugify
 from django.db.models import Q, F, Prefetch
 from django.shortcuts import get_object_or_404
 
+from utils.string_utils import sanitize_string, sanitize_html
+
 
 redis_client = redis.StrictRedis(host=settings.REDIS_HOST, port=6379, db=0)
+
+class PostAuthorViews(StandardAPIView):
+    permission_classes = [HasValidAPIKey, permissions.IsAuthenticated]
+
+    def get(self, request):
+        """
+        Enlistar los posts de un autor
+        """
+        user = request.user
+        if user.role == 'customer':
+            return self.error("You do not have permission to create posts")
+        
+        posts = Post.objects.filter(user=user)
+
+        if not posts.exists():
+            raise NotFound(detail="No posts found.")
+        
+        serialized_posts = PostListSerializer(posts, many=True).data
+
+        return self.paginate(request, serialized_posts)
+
+    def post(self, request):
+        """
+        Crear un post para un autor
+        """
+        user = request.user
+        if user.role == 'customer':
+            return self.error("You do not have permission to create posts")
+
+        # Validar campos obligatorios
+        required_fields = ["title", "content", "slug", "category"]
+        missing_fields = [
+            field for field in required_fields if not request.data.get(field)
+        ]
+        if missing_fields:
+            return self.error(f"Missing required fields: {', '.join(missing_fields)}")
+
+        # Obtener parametros
+        title = sanitize_string(request.data.get('title', None))
+        description = sanitize_string(request.data.get('description', ""))
+        #recordar que ckeditor envia codigo html por ello se usa sanitize_html
+        content = sanitize_html(request.data.get('content', None))        
+        post_status = sanitize_string(request.data.get('status', 'draft'))        
+
+        # Thumbnail params
+        thumbnail_name = request.data.get("thumbnail_name", None)
+        thumbnail_size = request.data.get("thumbnail_size", None)
+        thumbnail_type = request.data.get("thumbnail_type", None)
+        thumbnail_key = request.data.get("thumbnail_key", None)
+        thumbnail_order = request.data.get("thumbnail_order", 0)
+        thumbnail_media_type = request.data.get("thumbnail_media_type", 'image')
+
+        # Other params
+        keywords = sanitize_string(request.data.get("keywords", ""))
+        slug = slugify(request.data.get("slug", None))
+        category_slug = slugify(request.data.get("category", None))
+
+        # Validar existencia de la categoría
+        try:
+            category = Category.objects.get(slug=category_slug)
+        except Category.DoesNotExist:
+            return self.error(
+                f"Category '{category_slug}' does not exist.", status=400
+            )
+        
+        try:
+            post = Post.objects.create(
+                user=user,
+                title=title,
+                description=description,
+                content=content,
+                keywords=keywords,
+                slug=slug,
+                category=category,
+                status=post_status
+            )
+
+            if thumbnail_key:
+                thumbnail = Media.objects.create(
+                    order=thumbnail_order,
+                    name=thumbnail_name,
+                    size=thumbnail_size,
+                    type=thumbnail_type,
+                    key=thumbnail_key,
+                    media_type=thumbnail_media_type
+                )
+
+                post.thumbnail = thumbnail
+                post.save()
+
+            # Crear encabezado (heading)
+            headings = request.data.get("headings", [])
+            for heading_data in headings:
+                Heading.objects.create(
+                    post=post,
+                    title=heading_data.get('title'),
+                    slug=heading_data.get('slug'),
+                    level=heading_data.get('level'),
+                    order=heading_data.get('order'),
+                )
+
+            # Procesar encabezados dinámicamente desde el contenido HTML
+            #soup = BeautifulSoup(content, "html.parser")
+            #headings = soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6"])
+            
+            #for order, heading in enumerate(headings, start=1):
+            #    level = int(heading.name[1])  # Extract the level from 'h1', 'h2', etc.
+            #    Heading.objects.create(
+            #        post=post,
+            #        title=heading.get_text(strip=True),
+            #        slug=slugify(heading.get_text(strip=True)),
+            #        level=level,
+            #        order=order,
+            #    )
+
+        except Exception as e:
+            return self.error(f"An error occurred: {str(e)}")
+        
+        return self.response(
+            f"Post '{post.title}' created successfully. It will be showed in a few minutes",
+            status=status.HTTP_201_CREATED
+        )
+
+    def put(self, request):
+        """
+        Actualizar un post para un autor
+        """
+        user = request.user
+        if user.role == 'customer':
+            return self.error("You do not have permission to edit posts")
+        
+        post_slug = request.data.get("post_slug", None)
+        title = sanitize_string(request.data.get('title', None))
+        description = sanitize_string(request.data.get('description', ""))
+        content = sanitize_html(request.data.get('content', None))        
+        post_status = sanitize_string(request.data.get('status', 'draft'))   
+        keywords = sanitize_string(request.data.get('keywords', ""))
+        slug = slugify(request.data.get("slug", None))
+        category_slug = slugify(request.data.get("category", None))
+
+        thumbnail_name = request.data.get("thumbnail_name", None)
+        thumbnail_size = request.data.get("thumbnail_size", None)
+        thumbnail_type = request.data.get("thumbnail_type", None)
+        thumbnail_key = request.data.get("thumbnail_key", None)
+        thumbnail_order = request.data.get("thumbnail_order", 0)
+        thumbnail_media_type = request.data.get("thumbnail_media_type", 'image')
+
+        try:
+            post = Post.objects.get(slug=post_slug, user=user)
+        except Post.DoesNotExist:
+            raise NotFound(detail=f"Post {post_slug} does not exist")
+        
+        try:
+            category = Category.objects.get(slug=category_slug)
+        except Category.DoesNotExist:
+            return self.error(
+                f"Category '{category_slug}' does not exist.", status=400
+            )
+        
+        # Verificar si el slug ya existe en otro post
+        existing_post = Post.objects.filter(slug=slug).exclude(id=post.id).first()
+        if existing_post:
+            return self.error(f"The slug '{slug}' is already in use by another post")
+        
+        post.title=title
+        post.description = description
+        post.content = content
+        post.status = post_status
+        post.keywords = keywords
+        post.slug = slug
+        post.category=category
+
+        if thumbnail_key:
+            thumbnail = Media.objects.create(
+                order=thumbnail_order,
+                name=thumbnail_name,
+                size=thumbnail_size,
+                type=thumbnail_type,
+                key=thumbnail_key,
+                media_type=thumbnail_media_type
+            )
+
+            post.thumbnail = thumbnail
+
+ 
+        # Actualizar encabezados (headings)
+        headings = request.data.get("headings", [])
+        if headings:
+            post.headings.all().delete()  # Eliminar encabezados existentes
+            for heading_data in headings:
+                Heading.objects.create(
+                    post=post,
+                    title=heading_data.get("title"),
+                    level=heading_data.get("level"),
+                    order=heading_data.get("order"),
+                )
+
+        post.save()
+
+        return self.response(f"Post {post.title} edited successfully. Changes will be processed in a few minutes")
+
+        # Procesar encabezados dinámicamente desde el contenido HTML
+        #soup = BeautifulSoup(content, "html.parser")
+        #headings = soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6"])
+
+        # Borrar los headings actuales del post
+        #Heading.objects.filter(post=post).delete()
+        
+        #for order, heading in enumerate(headings, start=1):
+        #    level = int(heading.name[1])  # Extract the level from 'h1', 'h2', etc.
+        #    Heading.objects.create(
+        #        post=post,
+        #        title=heading.get_text(strip=True),
+        #        slug=slugify(heading.get_text(strip=True)),
+        #        level=level,
+        #        order=order,
+        #    )
+
+        #post.save()
+
+        #serialized_post = PostSerializer(post, context={'request': request}).data
+
+        #return self.response(serialized_post)
+
+    def delete(self, request):
+        """
+        Borrar un post para un autor
+        """
+
+        user = request.user
+        if user.role == 'customer':
+            return self.error("You do not have permission to create posts")
+        
+        post_slug = request.query_params.get("slug", None)
+        if not post_slug:
+            raise NotFound(detail="Post slug must be provided.")
+        
+        try:
+            post = Post.objects.get(slug=post_slug, user=user)
+        except Post.DoesNotExist:
+            raise NotFound(f"Post {post_slug} does not exist.")
+        
+        post.delete()
+
+        # Invalidar caché relacionado con este post
+        self._invalidate_post_list_cache()
+        self._invalidate_post_detail_cache(post_slug)
+        
+        return self.response(f"Post with slug {post_slug} deleted successully.")
+
+    def _invalidate_post_list_cache(self):
+        """
+        Invalida las claves de caché relacionadas con la lista de posts.
+        """
+        # Obtén todas las claves de caché activas relacionadas con los posts
+        cache_keys = cache.keys("post_list:*")  # Asume que todas las claves inician con 'post_list:'
+
+        # Eliminar todas las claves relacionadas
+        for key in cache_keys:
+            cache.delete(key)
+    
+    def _invalidate_post_detail_cache(self, slug):
+        """
+        Invalida el cache del post.
+        """
+        cache_key = f"post_detail:{slug}"
+        cache.delete(cache_key)
 
 #Lista por eso el listApiView
 #class PostListView(ListAPIView):
@@ -48,11 +318,12 @@ class PostListView(StandardAPIView):
             search = request.query_params.get("search", "").strip()
             sorting = request.query_params.get("sorting", None)
             ordering = request.query_params.get("ordering", None)
+            author = request.query_params.get("author", None)
             categories = request.query_params.getlist("category", [])
             page = request.query_params.get("p", 1)
 
             #variables que ingresan por la url
-            cache_key = f"post_list:{search}:{sorting}:{ordering}:{categories}:{page}"
+            cache_key = f"post_list:{search}:{sorting}:{ordering}:{author}:{categories}:{page}"
 
             #Antes de llamar a la bd se verifica si hay un cahce guardado con la llave post_list (el cache se guarda con llave valor)
             cached_posts = cache.get(cache_key) 
@@ -70,6 +341,10 @@ class PostListView(StandardAPIView):
             posts = Post.postObjects.all().select_related("category").prefetch_related(
                 Prefetch("post_analytics", to_attr="analytics_cache")
             )
+
+            # Filtrar por autor
+            if author:
+                posts = posts.filter(user__username=author)
 
             if not posts.exists():
                 raise NotFound(detail="No posts found")
@@ -231,7 +506,6 @@ class PostHeadingsView(StandardAPIView):
         heading_objects = Heading.objects.filter(post__slug = post_slug)
         serialized_data = HeadingSerializer(heading_objects, many=True).data
         return self.response(serialized_data)
-    
     
 class IncrementPostClickView(StandardAPIView):
     permission_classes = [HasValidAPIKey] #Validado con al apikey de env, validador de permisos
@@ -412,6 +686,7 @@ class IncrementCategoryClickView(StandardAPIView):
 class ListPostCommentsView(StandardAPIView):
     permission_classes = [HasValidAPIKey]
 
+    #Realiza este get fuera de la clase PostCommentViews, ya que los comentarios los puede ver cualquiera, no se necesita estar logueado
     def get(self, request):
 
         post_slug = request.query_params.get("slug", None)
@@ -447,7 +722,6 @@ class ListPostCommentsView(StandardAPIView):
 
         return self.paginate(request, serialized_comments)
 
-
 class PostCommentViews(StandardAPIView):
     permission_classes = [HasValidAPIKey, permissions.IsAuthenticated]
     
@@ -477,7 +751,7 @@ class PostCommentViews(StandardAPIView):
             content=content,
         )
 
-        # Invalidar el cache de comentarios para el post
+        # Invalidar el cache de comentarios para el post; es decir, si se creo un comentario que borre el cache si es que hay 
         self._invalidate_post_comments_cache(post_slug)
 
         # Actualizar interaccion de post
@@ -585,7 +859,6 @@ class PostCommentViews(StandardAPIView):
 
         cache.delete(cache_index_key)
 
-
 class ListCommentRepliesView(StandardAPIView):
     permission_classes = [HasValidAPIKey]
 
@@ -633,7 +906,6 @@ class ListCommentRepliesView(StandardAPIView):
             cache_keys.append(cache_key)
         cache.set(cache_index_key, cache_keys, timeout=60 * 5)
 
-    
 class CommentReplyViews(StandardAPIView):
     permission_classes = [HasValidAPIKey, permissions.IsAuthenticated]
 
@@ -694,6 +966,125 @@ class CommentReplyViews(StandardAPIView):
             cache.delete(key)
 
         cache.delete(cache_index_key)
+
+class PostLikeViews(StandardAPIView):
+    permission_classes = [HasValidAPIKey, permissions.IsAuthenticated]
+
+    def post(self, request):
+        """
+        Crear un 'like' para un post.
+        """
+        post_slug = request.data.get("slug", None)
+        user = request.user
+
+        ip_address = get_client_ip(request)
+
+        if not post_slug:
+            raise NotFound(detail="A valid post slug must be provided")
+        
+        try:
+            post = Post.objects.get(slug=post_slug)
+        except Post.DoesNotExist:
+            raise NotFound(detail=f"Post: {post_slug} does not exist")
+        
+        # Verificar si el usuario ya ha dado like al post
+        if PostLike.objects.filter(post=post, user=user).exists():
+            raise ValidationError(detail="You have already liked this post.")
+        
+        # Crear 'like'
+        PostLike.objects.create(post=post, user=user)
+
+        # Registrar interacción
+        PostInteraction.objects.create(
+            user=user,
+            post=post,
+            interaction_type="like",
+            ip_address=ip_address
+        )
+
+        # Incrementar métricas
+        analytics, _ = PostAnalytics.objects.get_or_create(post=post)
+        analytics.increment_metric("likes")
+
+        return self.response(f"You have liked the post: {post.title}")
+    
+    def delete(self, request):
+        """
+        Eliminar un 'like' de un post.
+        """
+        post_slug = request.query_params.get("slug", None)
+        user = request.user
+
+        if not post_slug:
+            raise NotFound(detail="A valid post slug must be provided")
+
+        try:
+            post = Post.objects.get(slug=post_slug)
+        except Post.DoesNotExist:
+            raise NotFound(detail=f"Post with slug: {post_slug} does not exist")
+        
+        # Verificar si el usuario ha dado like al post
+        try:
+            like = PostLike.objects.get(post=post, user=user)
+        except PostLike.DoesNotExist:
+            raise ValidationError(detail="You have not liked this post.")
+        
+        # Eliminar 'like'
+        like.delete()
+
+        # Actualizar métricas
+        analytics, _ = PostAnalytics.objects.get_or_create(post=post)
+        analytics.likes = PostLike.objects.filter(post=post).count()
+        analytics.save()
+
+        return self.response(f"You have unliked the post: {post.title}")
+
+class PostShareView(StandardAPIView):
+    permission_classes = [HasValidAPIKey]
+
+    def post(self, request):
+        """
+        Maneja la acción de compartir un post.
+        """
+        # Obtener parámetros
+        post_slug = request.data.get("slug", None)
+        platform = request.data.get("platform", "other").lower()
+        user = request.user if request.user.is_authenticated else None
+        ip_address = get_client_ip(request)
+
+        if not post_slug:
+            raise NotFound(detail="A valid post slug must be provided")
+        
+        try:
+            post = Post.objects.get(slug=post_slug)
+        except Post.DoesNotExist:
+            raise NotFound(detail=f"Post: {post_slug} does not exist")
+
+        # Verificar que la plataforma es válida
+        valid_platforms = [choice[0] for choice in PostShare._meta.get_field("platform").choices]
+        if platform not in valid_platforms:
+            raise ValidationError(detail=f"Invalid platform. Valid options are: {', '.join(valid_platforms)}")
+        
+        # Crear un registro de 'share'
+        PostShare.objects.create(
+            post=post,
+            user=user,
+            platform=platform
+        )
+
+        # Registrar interacción
+        PostInteraction.objects.create(
+            user=user,
+            post=post,
+            interaction_type="share",
+            ip_address=ip_address
+        )
+
+        # Actualizar métricas
+        analytics, _ = PostAnalytics.objects.get_or_create(post=post)
+        analytics.increment_metric("shares")
+
+        return self.response(f"Post '{post.title}' shared successfully on {platform.capitalize()}")
 
 class GenerateFakePostsView(StandardAPIView):
 

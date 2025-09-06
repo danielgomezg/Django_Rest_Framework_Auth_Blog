@@ -8,7 +8,14 @@ from .views import (
     CategoryDetailView,
     IncrementCategoryClickView,
     GenerateFakePostsView,
-    GenerateFakeAnalyticsView
+    GenerateFakeAnalyticsView,
+    PostCommentViews,
+    ListPostCommentsView,
+    ListCommentRepliesView,
+    CommentReplyViews,
+    PostLikeViews,
+    PostShareView, 
+    PostAuthorViews,
 ) 
 
 urlpatterns = [
@@ -21,4 +28,11 @@ urlpatterns = [
     path('categories/', CategoryListView.as_view(), name='category-list'),
     path('category/posts/', CategoryDetailView.as_view(), name='category-posts'),
     path('category/increments_clicks/', IncrementCategoryClickView.as_view(), name='increment-category-clicks'),
+    path('post/comment/', PostCommentViews.as_view()),
+    path('post/comments/', ListPostCommentsView.as_view()),
+    path('post/comments/replies/', ListCommentRepliesView.as_view()),
+    path('post/comments/reply/', CommentReplyViews.as_view()),
+    path('post/like/', PostLikeViews.as_view()),
+    path('post/share/', PostShareView.as_view()),
+    path('post/author/', PostAuthorViews.as_view()),
 ]

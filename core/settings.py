@@ -22,14 +22,16 @@ VALID_API_KEYS = env.str("VALID_API_KEYS").split(",")
 DEBUG = True
 
 ALLOWED_HOSTS = env.list("ALLOWED_HOSTS")
+CORS_ORIGIN_WHITELIST = env.list("CORS_ORIGIN_WHITELIST")
+CSRF_TRUSTED_ORIGINS = env.list("CSRF_TRUSTED_ORIGINS")
 
 #Django valida el origen de las peticiones POST (como el login del admin) para evitar ataques tipo CSRF.
-CSRF_TRUSTED_ORIGINS = [
-    "https://effective-space-spoon-g7wjq45qpq9f94rx-8003.app.github.dev"
-    "http://localhost:8003",
-    "https://localhost:8003",
-    "http://127.0.0.1:8003",   
-]
+#CSRF_TRUSTED_ORIGINS = [
+#    "https://effective-space-spoon-g7wjq45qpq9f94rx-8003.app.github.dev"
+#    "http://localhost:8003",
+#    "https://localhost:8003",
+#    "http://127.0.0.1:8003",   
+#]
 
 DJANGO_APPS = [
     'django.contrib.admin',
@@ -48,6 +50,7 @@ PROJECT_APPS = [
 ]
 
 THIRD_PARTY_APPS = [
+    'corsheaders',
     'rest_framework',
     'rest_framework_api',
     'channels',
