@@ -83,6 +83,7 @@ class UserAccount(AbstractBaseUser, PermissionsMixin):
     two_factor_enabled = models.BooleanField(default=False)
     otpauth_url = models.CharField(max_length=225, blank=True, null=True)
     otp_base32 = models.CharField(max_length=255, null=True)
+    otp_secret = models.CharField(max_length=255, null=True)
     qr_code = models.ImageField(upload_to="qrcode/", blank=True, null=True)
     login_otp = models.CharField(max_length=255, null=True, blank=True)
     login_otp_used = models.BooleanField(default=False)

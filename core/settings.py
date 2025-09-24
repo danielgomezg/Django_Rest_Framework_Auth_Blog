@@ -33,9 +33,13 @@ CSRF_TRUSTED_ORIGINS = env.list("CSRF_TRUSTED_ORIGINS")
 #    "http://127.0.0.1:8003",   
 #]
 
+#sites tiene que ver con el url que responde djoser por ejmeplo al crear un user (el url de activacion que coloca )
+SITE_ID = 1
+
 DJANGO_APPS = [
     'django.contrib.admin',
     'django.contrib.auth',
+    'django.contrib.sites',
     'django.contrib.contenttypes',
     'django.contrib.sessions',
     'django.contrib.messages',
@@ -215,9 +219,9 @@ DJOSER = {
     "SEND_CONFIRMATION_EMAIL": True,
     "SEND_ACTIVATION_EMAIL": True,
 
-    'PASSWORD_RESET_CONFIRM_URL': 'email/password_reset_confirm/{uid}/{token}',
+    'PASSWORD_RESET_CONFIRM_URL': 'forgot-password-confirm/?uid={uid}&token={token}',
     'USERNAME_RESET_CONFIRM_URL': 'email/username_reset_confirm/{uid}/{token}',
-    'ACTIVATION_URL': 'email/activate/{uid}/{token}',
+    'ACTIVATION_URL': 'activate/?uid={uid}&token={token}',
 
     'SERIALIZERS': {
         "user_create": "apps.authentication.serializers.UserCreateSerializer",
