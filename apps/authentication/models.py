@@ -13,6 +13,8 @@ from ckeditor.fields import RichTextField
 #solo de ejemplo de lo que se puede hacer
 from djoser.signals import user_registered, user_activated
 
+from utils.string_utils import sanitize_username
+
 #ESTA FUNCION USA EL MODELO USER, EL CUAL VIENE DEFINIDO POR DEFECTO EN DJANGO, POR ESO EL BASEUSERMANAGER
 class UserAccountManager(BaseUserManager):
     RESTRICTED_USERNAMES = ["admin", "undefined", "null", "superuser", "root", "system"]
@@ -30,6 +32,19 @@ class UserAccountManager(BaseUserManager):
 
         if not first_name or not last_name:
             raise ValueError("Users must have a first name and last name")
+        
+        user.first_name = first_name
+        user.last_name = last_name
+
+        username = extra_fields.get("username", None)
+        if username:
+            sanitized_username = sanitize_username(username)
+
+            # Verificar si el nombre de usuario está en la lista de restringidos
+            if sanitized_username.lower() in self.RESTRICTED_USERNAMES:
+                raise ValueError(f"The username '{sanitized_username}' is not allowed.")
+            
+            user.username = sanitized_username
         
         user.first_name = first_name
         user.last_name = last_name

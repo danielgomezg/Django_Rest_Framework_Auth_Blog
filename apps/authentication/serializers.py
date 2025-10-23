@@ -3,6 +3,9 @@ from djoser.serializers import UserCreateSerializer
 
 from django.contrib.auth import get_user_model
 
+from apps.media.serializers import MediaSerializer
+from apps.user_profile.models import UserProfile
+
 #Esto siempre se hace en cualquier archivo que no sea models, para obtener el modelo usuario
 User = get_user_model()
 
@@ -34,8 +37,9 @@ class UserSerializer(serializers.ModelSerializer):
             "qr_code",
         ]
 
-
 class UserPublicSerializer(serializers.ModelSerializer):
+    profile_picture = serializers.SerializerMethodField()
+
     class Meta:
         model = User
         fields = [
@@ -45,4 +49,11 @@ class UserPublicSerializer(serializers.ModelSerializer):
             "updated_at",
             "role",
             "verified",
+            "profile_picture",
         ]
+
+    def get_profile_picture(self, obj):
+        user_profile = UserProfile.objects.get(user=obj)
+        if user_profile and user_profile.profile_picture:
+            return MediaSerializer(user_profile.profile_picture).data
+        return None

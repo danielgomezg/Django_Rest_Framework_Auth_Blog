@@ -51,6 +51,7 @@ PROJECT_APPS = [
     'apps.user_profile',
     'apps.media',
     'apps.blog',
+    'apps.newsletter',
 ]
 
 THIRD_PARTY_APPS = [

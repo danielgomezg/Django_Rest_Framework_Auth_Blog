@@ -127,8 +127,9 @@ class Post(models.Model):
         null=True
 
     )
+    featured = models.BooleanField(default=False)
     keywords = models.CharField(max_length=128)
-    slug = models.CharField(max_length=128)
+    slug = models.CharField(max_length=128, unique=True)
     created_at = models.DateTimeField(default=timezone.now)
     updated_at = models.DateTimeField(auto_now=True)
     status = models.CharField(max_length=10, choices=status_options, default='draft')

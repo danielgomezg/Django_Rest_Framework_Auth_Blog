@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from .models import Post, Category, Heading, PostView, CategoryAnalytics, PostAnalytics, PostInteraction, PostLike, PostShare, Comment
 from apps.media.serializers import MediaSerializer
+from apps.authentication.serializers import UserPublicSerializer
 
 class CategorySerializer(serializers.ModelSerializer):
     class Meta:
@@ -38,6 +39,7 @@ class HeadingSerializer(serializers.ModelSerializer):
     class Meta:
         model = Heading
         fields = [
+            "id",
             "title",
             "slug",
             "level",
@@ -83,6 +85,7 @@ class PostListSerializer(serializers.ModelSerializer):
     category = CategoryListSerializer()
     view_count = serializers.SerializerMethodField()
     thumbnail = MediaSerializer()
+    user = UserPublicSerializer()
     class Meta:
         model = Post
         fields = [
@@ -92,7 +95,12 @@ class PostListSerializer(serializers.ModelSerializer):
             "thumbnail",
             "slug",
             "category",
-            "view_count"
+            "view_count",
+            "updated_at",
+            "created_at",
+            "user",
+            "featured",
+            "status",
         ]
 
     def get_view_count(self, obj):

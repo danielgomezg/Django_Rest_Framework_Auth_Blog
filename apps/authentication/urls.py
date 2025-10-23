@@ -9,10 +9,12 @@ from .views import (
     OTPLoginView,
     SendOTPLoginView,
     VerifyOTPLoginView,
+    UpdateUserInformationView,
 )
 
 
 urlpatterns = [
+    path("update_user/", UpdateUserInformationView.as_view()),
     path(
         "generate_qr_code/",
         GenerateQRCodeView.as_view(),

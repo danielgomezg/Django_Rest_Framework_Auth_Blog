@@ -64,7 +64,7 @@ class PostAdmin(admin.ModelAdmin):
             'fields': ('title', 'description', 'content', 'keywords', 'slug', 'category', 'user')
         }), 
         ('Status & Dates', {
-            'fields': ('status', 'created_at', 'updated_at')
+            'fields': ('status', 'featured', 'created_at', 'updated_at')
         }),
     )
     inlines = [HeadingInline]#[HeadingInline, MediaInLine]

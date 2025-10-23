@@ -20,9 +20,30 @@ from rest_framework import status
 
 from core.permissions import HasValidAPIKey
 from utils.ip_utils import get_client_ip
+from utils.string_utils import sanitize_string, sanitize_username
 
 User = get_user_model()
 
+class UpdateUserInformationView(StandardAPIView):
+    permission_classes = [permissions.IsAuthenticated, HasValidAPIKey]
+
+    def put(self, request):
+        user = request.user
+
+        username = request.data.get("username", None)
+        first_name = request.data.get("first_name", None)
+        last_name = request.data.get("last_name", None)
+
+        if username:
+            user.username = sanitize_username(username)
+        if first_name:
+            user.first_name = sanitize_string(first_name)
+        if last_name:
+            user.last_name = sanitize_string(last_name)
+
+        user.save()
+
+        return self.response("User information updated successfully")
 
 class GenerateQRCodeView(StandardAPIView):
     permission_classes = [permissions.IsAuthenticated, HasValidAPIKey]

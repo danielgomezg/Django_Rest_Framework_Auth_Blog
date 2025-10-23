@@ -16,6 +16,9 @@ from .views import (
     PostLikeViews,
     PostShareView, 
     PostAuthorViews,
+    DetailPostView,
+    CategoriesListView,
+    DetailCategoryView,
 ) 
 
 urlpatterns = [
@@ -25,7 +28,9 @@ urlpatterns = [
     path('post/<slug>', PostDetailView.as_view(), name='post-detail'),
     path('post/headings/', PostHeadingsView.as_view(), name='post-headings'), #antes 'post/<slug:slug>/headings/', ahor en views.py se obtiene el slug del request
     path('post/increments_clicks/', IncrementPostClickView.as_view(), name='increment-post-clicks'),
+    path('category/', DetailCategoryView.as_view(), name='category-detail'),
     path('categories/', CategoryListView.as_view(), name='category-list'),
+    path('categories/list/', CategoriesListView.as_view()),
     path('category/posts/', CategoryDetailView.as_view(), name='category-posts'),
     path('category/increments_clicks/', IncrementCategoryClickView.as_view(), name='increment-category-clicks'),
     path('post/comment/', PostCommentViews.as_view()),
@@ -35,4 +40,5 @@ urlpatterns = [
     path('post/like/', PostLikeViews.as_view()),
     path('post/share/', PostShareView.as_view()),
     path('post/author/', PostAuthorViews.as_view()),
+    path('post/get/', DetailPostView.as_view()),
 ]

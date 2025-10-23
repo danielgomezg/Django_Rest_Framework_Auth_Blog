@@ -48,3 +48,7 @@ Faker==33.0.0
 
 #sanitiza html
 bleach==6.2.0
+
+#Uso más común es en el Web Scraping (raspado web), que es la técnica para extraer grandes cantidades de datos de sitios web.
+#En este caso para extraer los headings del content
+beautifulsoup4==4.12.3

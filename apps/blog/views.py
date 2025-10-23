@@ -1,16 +1,18 @@
 from rest_framework.generics import ListAPIView, RetrieveAPIView
-from .serializers import PostListSerializer, PostSerializer, HeadingSerializer, CategoryListSerializer
+from .serializers import PostListSerializer, PostSerializer, HeadingSerializer, CategoryListSerializer, CategorySerializer
 from .models import Post, Heading, PostAnalytics, Category, PostView,  PostInteraction, Comment, PostLike, PostShare
 from rest_framework.views import APIView
 from rest_framework_api.views import StandardAPIView
 from rest_framework.response import Response
 from .utils import get_client_ip
 from rest_framework.exceptions import NotFound, APIException, ValidationError
-from rest_framework import permissions
+from rest_framework import permissions, status
 from .tasks import increment_post_impressions, increment_post_views_task
 from apps.authentication.models import UserAccount
 import redis
-#from bs4 import BeautifulSoup
+#para imprimir de mejor forma los objetos
+from pprint import pprint
+from bs4 import BeautifulSoup
 from django.conf import settings
 from core.permissions import HasValidAPIKey
 #metodo de cache mas rapido
@@ -24,13 +26,70 @@ import random
 import uuid
 from django.utils.text import slugify
 
-from django.db.models import Q, F, Prefetch
+from django.db.models import Q, F, Prefetch, Value
+from django.db.models.functions import Coalesce
 from django.shortcuts import get_object_or_404
-
+from apps.media.models import Media
 from utils.string_utils import sanitize_string, sanitize_html
 
 
 redis_client = redis.StrictRedis(host=settings.REDIS_HOST, port=6379, db=0)
+
+class CategoriesListView(StandardAPIView):
+    permission_classes = [HasValidAPIKey]
+
+    def get(self,request):
+
+        categories = Category.objects.all()
+
+        serialized_categories = CategoryListSerializer(categories, many=True).data
+
+        return self.response(serialized_categories)
+    
+class DetailCategoryView(StandardAPIView):
+    permission_classes = [HasValidAPIKey]
+
+    def get(self, request):
+        """
+        Obtener la informacion de una categoria
+        """
+
+        slug = request.query_params.get('slug', None)
+
+        if not slug:
+            raise ValueError("Slug parameter must be provided")
+
+        try:
+            category = Category.objects.get(slug=slug)
+        except Category.DoesNotExist:
+            raise NotFound(detail=f"No category found for {slug}")
+        
+        serialized_category = CategorySerializer(category).data
+
+        return self.response(serialized_category)
+
+#hace el get que servira para editar un post
+class DetailPostView(StandardAPIView):
+    permission_classes = [HasValidAPIKey]
+
+    def get(self, request):
+        """
+        Obtener la informacion de un post
+        """
+
+        slug = request.query_params.get('slug', None)
+
+        if not slug:
+            raise ValueError("Slug parameter must be provided")
+
+        try:
+            post = Post.objects.get(slug=slug)
+        except Post.DoesNotExist:
+            raise NotFound(detail=f"No post found for {slug}")
+        
+        serialized_post = PostSerializer(post, context={'request': request}).data
+
+        return self.response(serialized_post)
 
 class PostAuthorViews(StandardAPIView):
     permission_classes = [HasValidAPIKey, permissions.IsAuthenticated]
@@ -122,29 +181,29 @@ class PostAuthorViews(StandardAPIView):
                 post.save()
 
             # Crear encabezado (heading)
-            headings = request.data.get("headings", [])
-            for heading_data in headings:
-                Heading.objects.create(
-                    post=post,
-                    title=heading_data.get('title'),
-                    slug=heading_data.get('slug'),
-                    level=heading_data.get('level'),
-                    order=heading_data.get('order'),
-                )
+            #headings = request.data.get("headings", [])
+            #for heading_data in headings:
+             #   Heading.objects.create(
+              #      post=post,
+               #     title=heading_data.get('title'),
+                #    slug=heading_data.get('slug'),
+                #    level=heading_data.get('level'),
+                #    order=heading_data.get('order'),
+                #)
 
             # Procesar encabezados dinámicamente desde el contenido HTML
-            #soup = BeautifulSoup(content, "html.parser")
-            #headings = soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6"])
+            soup = BeautifulSoup(content, "html.parser")
+            headings = soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6"])
             
-            #for order, heading in enumerate(headings, start=1):
-            #    level = int(heading.name[1])  # Extract the level from 'h1', 'h2', etc.
-            #    Heading.objects.create(
-            #        post=post,
-            #        title=heading.get_text(strip=True),
-            #        slug=slugify(heading.get_text(strip=True)),
-            #        level=level,
-            #        order=order,
-            #    )
+            for order, heading in enumerate(headings, start=1):
+                level = int(heading.name[1])  # Extract the level from 'h1', 'h2', etc.
+                Heading.objects.create(
+                    post=post,
+                    title=heading.get_text(strip=True),
+                    slug=slugify(heading.get_text(strip=True)),
+                    level=level,
+                    order=order,
+                )
 
         except Exception as e:
             return self.error(f"An error occurred: {str(e)}")
@@ -214,23 +273,30 @@ class PostAuthorViews(StandardAPIView):
             )
 
             post.thumbnail = thumbnail
+        
+        # Procesar encabezados dinámicamente desde el contenido HTML
+        soup = BeautifulSoup(content, "html.parser")
+        headings = soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6"])
 
- 
-        # Actualizar encabezados (headings)
-        headings = request.data.get("headings", [])
-        if headings:
-            post.headings.all().delete()  # Eliminar encabezados existentes
-            for heading_data in headings:
-                Heading.objects.create(
-                    post=post,
-                    title=heading_data.get("title"),
-                    level=heading_data.get("level"),
-                    order=heading_data.get("order"),
-                )
+        # Borrar los headings actuales del post
+        Heading.objects.filter(post=post).delete()
+
+        for order, heading in enumerate(headings, start=1):
+            level = int(heading.name[1])  # Extract the level from 'h1', 'h2', etc.
+            Heading.objects.create(
+                post=post,
+                title=heading.get_text(strip=True),
+                slug=slugify(heading.get_text(strip=True)),
+                level=level,
+                order=order,
+            )
 
         post.save()
 
-        return self.response(f"Post {post.title} edited successfully. Changes will be processed in a few minutes")
+        serialized_post = PostSerializer(post, context={'request': request}).data
+
+        return self.response(serialized_post)
+        #return self.response(f"Post {post.title} edited successfully. Changes will be processed in a few minutes")
 
         # Procesar encabezados dinámicamente desde el contenido HTML
         #soup = BeautifulSoup(content, "html.parser")
@@ -319,11 +385,12 @@ class PostListView(StandardAPIView):
             sorting = request.query_params.get("sorting", None)
             ordering = request.query_params.get("ordering", None)
             author = request.query_params.get("author", None)
-            categories = request.query_params.getlist("category", [])
+            is_featured = request.query_params.get("is_featured", None)
+            categories = request.query_params.getlist("categories", [])
             page = request.query_params.get("p", 1)
 
             #variables que ingresan por la url
-            cache_key = f"post_list:{search}:{sorting}:{ordering}:{author}:{categories}:{page}"
+            cache_key = f"post_list:{search}:{sorting}:{ordering}:{author}:{is_featured}:{categories}:{page}"
 
             #Antes de llamar a la bd se verifica si hay un cahce guardado con la llave post_list (el cache se guarda con llave valor)
             cached_posts = cache.get(cache_key) 
@@ -338,16 +405,25 @@ class PostListView(StandardAPIView):
                 return self.paginate(request, cached_posts) #respuesta con apiview Response(cached_posts)
             
             #consulta inicial vacia
-            posts = Post.postObjects.all().select_related("category").prefetch_related(
-                Prefetch("post_analytics", to_attr="analytics_cache")
+            #posts = Post.postObjects.all().select_related("category").prefetch_related(
+             #   Prefetch("post_analytics", to_attr="analytics_cache")
+            #)
+
+            # Consulta inicial optimizada con nombres de anotación únicos
+            posts = Post.postobjects.all().select_related("category").annotate(
+                analytics_views=Coalesce(F("post_analytics__views"), Value(0)),
+                analytics_likes=Coalesce(F("post_analytics__likes"), Value(0)),
+                analytics_comments=Coalesce(F("post_analytics__comments"), Value(0)),
+                analytics_shares=Coalesce(F("post_analytics__shares"), Value(0)),
             )
 
             # Filtrar por autor
             if author:
                 posts = posts.filter(user__username=author)
 
+            # Si no hay posts del autor, responder inmediatamente
             if not posts.exists():
-                raise NotFound(detail="No posts found")
+                raise NotFound(detail=f"No posts found for author: {author}")
 
             # Filtrar por busqueda
             if search != "":
@@ -355,7 +431,8 @@ class PostListView(StandardAPIView):
                     Q(title__icontains=search) |
                     Q(description__icontains=search) |
                     Q(content__icontains=search) |
-                    Q(keywords__icontains=search) 
+                    Q(keywords__icontains=search) |
+                    Q(category__name__icontains=search)
                 )
             
             # Filtrar por categoria
@@ -376,20 +453,42 @@ class PostListView(StandardAPIView):
                         category_queries |= slug_query
                 posts = posts.filter(category_queries)
 
+            # Filtrar por posts destacados
+            if is_featured:
+                # Convertir el valor del parámetro a booleano
+                is_featured = is_featured.lower() in ['true', '1', 'yes']
+                posts = posts.filter(featured=is_featured)
+
+            # Ordenamiento
+            #if sorting:
+             #   if sorting == 'newest':
+              #      posts = posts.order_by("-created_at")
+               # elif sorting == 'recently_updated':
+                #    posts = posts.order_by("-updated_at") #created_at  updated_at
+                #elif sorting == 'most_viewed':
+                 #   posts = posts.annotate(popularity=F("analytics_cache__views")).order_by("-popularity")
+
+            # if ordering:
+            #    if ordering == 'az':
+             #       posts = posts.order_by("title")
+              #  if ordering == 'za':
+               #     posts = posts.order_by("-title")
+
             # Ordenamiento
             if sorting:
-                if sorting == 'newest':
+                if sorting == "newest":
                     posts = posts.order_by("-created_at")
-                elif sorting == 'recently_updated':
-                    posts = posts.order_by("-updated_at") #created_at  updated_at
-                elif sorting == 'most_viewed':
-                    posts = posts.annotate(popularity=F("analytics_cache__views")).order_by("-popularity")
-
-            if ordering:
-                if ordering == 'az':
+                elif sorting == 'az':
                     posts = posts.order_by("title")
-                if ordering == 'za':
+                elif sorting == 'za':
                     posts = posts.order_by("-title")
+                elif sorting == "recently_updated":
+                    posts = posts.order_by("-updated_at")
+                elif sorting == "most_viewed":
+                    posts = posts.order_by("-analytics_views") 
+
+
+           
 
             serialized_posts = PostListSerializer(posts, many=True).data
 
@@ -405,14 +504,16 @@ class PostListView(StandardAPIView):
             for post in posts:
                 redis_client.incr(f"post:impressions:{post.id}") #Redis usa claves estructuradas tipo "recurso:tipo:identificador"
 
-        except Post.DoesNotExist:
-            raise NotFound(detail="No posts found")
+            #recordar que paginate es de la libreria que creo el instructor, por ende en la documentacion esta el fucnionamiento
+            #ipServidor/api/blog/posts/?p=1&page_size=10
+            return self.paginate(request, serialized_posts) #Respuesta con paginacion; Antes => Response(serialized_posts)
+
+        except NotFound as e:
+            return self.response([], status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             raise APIException(detail=f"An unexpected error ocurreed: {str(e)}")
         
-        #recordar que paginate es de la libreria que creo el instructor, por ende en la documentacion esta el fucnionamiento
-        #ipServidor/api/blog/posts/?p=1&page_size=10
-        return self.paginate(request, serialized_posts) #Respuesta con paginacion; Antes => Response(serialized_posts)
+        
 
 #es como un getid, por lo que recibe solo uno por eso el RetrieveApiView
 #class PostDetailView(RetrieveAPIView):
